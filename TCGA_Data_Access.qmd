@@ -3,6 +3,7 @@ title: "TCGA Data Access"
 editor: visual
 format:
   html:
+    embed-resources: true
     toc: true
     toc-location: left
     toc-title: "Contents"
@@ -99,9 +100,13 @@ kable(project_summary$data_categories, caption="Available Data Categories for BR
 
 We want to take a look at RNA-seq data, and to do this we must search the GDC database for the specific files we want. In TCGAbiolinks, searching the GDC is done by building a query. A query tells the GDC exactly which files you are interested in.
 
-A query for BRCA RNA-seq data must specify the following: - which project? (TCGA-BRCA)
+A query for BRCA RNA-seq data must specify the following:
 
-Optional specifications are: - which data category? (Transcriptome Profiling)
+-   which project? (TCGA-BRCA)
+
+Optional specifications are:
+
+-   which data category? (Transcriptome Profiling)
 
 -   which data type? (Gene Expression Quantification)
 

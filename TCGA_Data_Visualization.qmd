@@ -94,8 +94,8 @@ ggplot(as.data.frame(sample_metadata),
   theme_bw() +
   labs(
     title = "Pathologic Stage Frequency",
-    x = "Pathologic Stage",
-    y = "Frequency"
+    x = "Pathologic Stage AJCC",
+    y = "Count"
   )
 
 ```
@@ -237,7 +237,7 @@ ggplot(data_sample_name, aes(x = expr)) +
        y = "Density")
 ```
 
-Observations: Many genes have zero counts (spike at 0), followed by a gap, then a long tail of highly expressed genes.
+Observation: Many genes have zero counts (spike at 0), followed by a gap, then a long tail of highly expressed genes.
 
 ::: {.callout-tip title="Exercise"}
 Why is it problematic to have many genes with zero counts, and what can we do about it?
@@ -277,7 +277,7 @@ CPM normalization accounts for differences in sequencing depth between samples. 
 
 Next, we log-transform the filtered CPM values for visualization:
 ```{r}
-logcounts <- cpm(expr_matrix[keep,],log=TRUE)
+logcounts <- cpm(expr_matrix[keep,],log=TRUE,prior.count = 1)
 ```
 
 We convert the log-transformed data to long format for plotting:
@@ -305,7 +305,7 @@ ggplot(data_sample_name, aes(x = expr)) +
        y = "Density")
 ```
 ::: {.callout-tip title="Exercise"}
-Why do we sometimes see negative values in the log2(CPM + 1) plots?
+Why do we see negative values in the log2(CPM + 1) plots?
 :::
 
 <details>
@@ -347,4 +347,6 @@ ggplot(pca_df, aes(PC1, PC2, color = definition)) +
   theme_bw()
 ```
 We can see that the first principal component (PC1) separates the samples clearly into healthy tissue versus tumor samples. This indicates that the largest source of variation in the dataset corresponds to tissue type, reflecting the fundamental biological differences between normal and cancerous breast tissue.
+
+
 
