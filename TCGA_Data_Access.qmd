@@ -1,0 +1,418 @@
+---
+title: "TCGA Data Access"
+editor: visual
+format:
+  html:
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+    toc-depth: 4
+    sidebar: floating
+---
+
+In this session, we will learn how to use the R programming language to access data from TCGA (The Cancer Genome Atlas).
+
+## Installation of Packages
+
+To begin working with TCGA data in R, we need to install several packages. Some packages come from CRAN (the main R repository) and can be installed with `install.packages`, while others (especially bioinformatics tools) come from Bioconductor.
+
+**For Windows users:** If you are using Windows, packages installed from source may require Rtools, a system for compiling R packages. You can download it from the R website [here](https://cran.r-project.org/bin/windows/Rtools/). After installation, restart RStudio.
+
+**Check that your R packages are up to date In RStudio:**
+
+1.  Go to **Tools** → **Check for Package Updates…**
+2.  A window will open showing which packages need updating.
+3.  Click Update to install the newest versions.
+
+Now we can install the packages we need by running the following cell:
+
+```{r}
+#| eval: false
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("TCGAbiolinks", type="source")
+install.packages("tidyverse")
+```
+
+You can load the installed packages:
+
+```{r}
+#| message: false
+#| warning: false
+
+library(knitr)
+library(SummarizedExperiment)
+library(TCGAbiolinks)
+library(tidyverse)
+```
+
+## Setting up working directory
+
+A working directory is the folder where R reads and saves files. To check your current working directory run:
+
+```{r}
+#| eval: false
+getwd()
+```
+
+To set a new working directory:
+
+1.  In RStudio, go to **Session** → **Set Working Directory** → **Choose Directory…**
+
+2.  Select the folder you want to use.
+
+Or set it directly with code:
+
+```{r}
+#| eval: false
+setwd("/path/to/your/folder")
+```
+
+## Accessing TCGA Data
+
+TCGA is a massive public resource containing genomic and clinical data for dozens of cancer types. We interact with the TCGA data through the GDC (Genomic Data Commons) knowledge base by using the `TCGAbiolinks` package or by accessing the data portal in a browser.
+
+### Access via R and `TCGAbiolinks`
+
+With the `TCGAbiolinks` package loaded, we retrieve a list of all available projects from the GDC database. Since TCGA projects start with the prefix "TCGA-", we can filter the full list to focus only on cancer-specific projects. Displaying the project names helps identifying for which cancers data is available.
+
+```{r}
+all_projects <- getGDCprojects()
+
+# Filter for TCGA projects
+tcga_projects <- all_projects[grepl("^TCGA-", all_projects$project_id), ]
+
+# Show available cancer types
+kable(head(tcga_projects[, c("project_id", "name")]),
+      caption = "Available TCGA Cancer Types")
+```
+
+In this tutorial, we focus on **Breast Cancer** (TCGA-BRCA) in **females** as an example. Let’s look at the available data categories for BRCA:
+
+```{r}
+project_summary <- getProjectSummary(project = "TCGA-BRCA")
+
+kable(project_summary$data_categories, caption="Available Data Categories for BRCA")
+```
+
+#### Building a GDC Query
+
+We want to take a look at RNA-seq data, and to do this we must search the GDC database for the specific files we want. In TCGAbiolinks, searching the GDC is done by building a query. A query tells the GDC exactly which files you are interested in.
+
+A query for BRCA RNA-seq data must specify the following: - which project? (TCGA-BRCA)
+
+Optional specifications are: - which data category? (Transcriptome Profiling)
+
+-   which data type? (Gene Expression Quantification)
+
+-   which workflow? (STAR - Counts)
+
+If you are unsure which values to use, the official TCGAbiolinks [vignette](https://bioconductor.org/packages/release/bioc/vignettes/TCGAbiolinks/inst/doc/query.html) provides a helpful description of supported data.type and workflow.type options.
+
+```{r}
+#| message: false
+# Database search
+brca_samples <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+# Extract sample metadata
+sample_info <- getResults(brca_samples)
+kable(head(sample_info), caption = "Sample Metadata")
+```
+
+The resulting metadata includes useful information, such as:
+
+-   file, sample, and patient IDs
+
+-   sample type (e.g., tumor tissue vs. normal tissue)
+
+-   technical details and sequencing information
+
+This metadata tells us what files exist, but it does not include some important patient-level information, such as gender, age, or diagnosis. These details are stored separately in the clinical dataset.
+
+#### Accessing Clinical Data
+
+```{r}
+brca_clin <- GDCquery_clinic(project = "TCGA-BRCA", type = "clinical")
+kable(head(brca_clin))
+```
+
+The clinical table typically includes:
+
+-   gender
+
+-   age at diagnosis
+
+-   vital status (alive/deceased)
+
+-   tumor stage
+
+-   etc.
+
+First, we verify whether the clinical data contains any patients without a gender entry:
+
+```{r}
+sum(is.na(brca_clin$gender))
+```
+
+If one or more entries have missing gender, as it is the case here, we remove those rows to avoid problems later:
+
+```{r}
+brca_clin <- brca_clin %>%
+  filter(!is.na(gender)) 
+```
+
+Next, we inspect how many males and females are present in the cleaned clinical dataset:
+
+```{r}
+table(brca_clin$gender)
+```
+
+This gives us the number of unique male and female patients in TCGA-BRCA.
+
+#### Merging Clinical Gender Information Into Sample Metadata
+
+To filter samples by gender later, we need gender information added directly to the `sample_info` table, which currently only contains sample-level metadata.
+
+We merge the two tables using:
+
+-   "cases.submitter_id" (in `sample_info`)
+
+-   "bcr_patient_barcode" (in `brca_clin`)
+
+These are equivalent patient identifiers.
+
+```{r}
+sample_info <- sample_info %>%
+  left_join(
+    brca_clin %>% select(bcr_patient_barcode, gender),
+    by = c("cases.submitter_id" = "bcr_patient_barcode")
+  )
+```
+
+Now each sample is associated with a patient’s gender.
+
+After merging, we check how many samples belong to each gender:
+
+```{r}
+table(sample_info$gender)
+```
+
+::: {.callout-tip title="Exercise"}
+Why are the numbers now different? Before you continue, try to think about why this might be.
+:::
+
+<details>
+
+<summary>Show Code</summary>
+
+This does not mean TCGA suddenly contains more patients, instead it means some patients contributed multiple samples, each counted separately. To verify this, we identify patients that appear more than once:
+
+```{r}
+kable(sample_info %>%
+  add_count(cases.submitter_id) %>%  # adds column 'n' (number of appearances)
+  filter(n > 1) %>%                  # keep only duplicated patient IDs
+  arrange(cases.submitter_id) %>%
+  head())
+```
+
+This reveals that many patients have two samples:
+
+-   Primary Tumor
+
+-   Solid Tissue Normal
+
+A single patient may contribute multiple samples. Therefore, the gender counts increase because we now count samples, not patients.
+
+</details>
+
+#### Filtering to Keep Only Female Samples
+
+Once we confirm the gender assignment, we can keep only female samples:
+
+```{r}
+sample_info <- sample_info %>% filter(gender != "male")
+```
+
+From this point forward, all analyses will be limited to female BRCA samples, which is common since male breast cancer biology differs significantly and is extremely rare.
+
+#### Selecting a Subset of Samples to Download
+
+Now we are finally ready to download real RNA-seq data from TCGA. But downloading the full BRCA dataset would take a very long time. Therefore, for teaching purposes, we only download a small subset.
+
+We choose:
+
+-   10 Primary Tumor samples
+
+-   10 Solid Tissue Normal samples
+
+from 10 patients total, meaning we have one tumor and control sample per patient.
+
+We extract the sample barcodes from `sample_info`, which already contains the gender and clinical metadata we merged earlier.
+
+```{r}
+# Identify patients with exactly 2 samples
+paired_patients_info <- sample_info %>%
+  add_count(cases.submitter_id) %>%
+  filter(n == 2) %>%
+  distinct(cases.submitter_id, .keep_all = TRUE)
+
+# Subset sample_info to include only these paired patients
+paired_samples <- sample_info %>%
+  filter(cases.submitter_id %in% paired_patients_info$cases.submitter_id)
+
+# Sanity check – ensure each patient has exactly 1 tumor and 1 normal
+valid_paired_patients <- paired_samples %>%
+  group_by(cases.submitter_id) %>%
+  summarize(
+    n_samples = n(),
+    n_tumor = sum(sample_type == "Primary Tumor"),
+    n_normal = sum(sample_type == "Solid Tissue Normal")
+  ) %>%
+  filter(n_tumor == 1 & n_normal == 1) %>%
+  pull(cases.submitter_id)  # extract the patient IDs as a vector
+
+# Keep only the first 10 patients for quick download
+paired_samples <- paired_samples %>%
+  filter(cases.submitter_id %in% valid_paired_patients[1:10])
+```
+
+After selecting the 20 barcodes, we build a new query that fetches only these specific files.
+
+::: {.callout-tip title="Exercise"}
+Try it by yourself. Tip: To specify the samples, you need to add the parameter `barcode` in `GDCquery`.
+:::
+
+```{r}
+#| code-fold: true
+#| message: false
+# Query only these samples
+brca_query_small <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts",
+  barcode = paired_samples$cases
+)
+```
+
+#### Downloading RNA-seq Gene Count Data
+
+Once the query is built, we run the GDC download function, which retrieves 20 RNA-seq count files associated with our selected barcodes.
+
+```{r}
+#| eval: false
+
+# Download the files 
+GDCdownload(brca_query_small)
+```
+
+#### Preparing the Data with GDCprepare
+
+After downloading, GDCprepare() automatically:
+
+-   loads the downloaded files
+
+-   parses metadata and merges it with sample information
+
+-   constructs a SummarizedExperiment object
+
+-   organizes:
+
+    -   the gene expression count matrix
+
+    -   sample metadata (columns)
+
+    -   gene annotations / features (rows)
+
+```{r}
+#| message: false
+brca_data_small <- GDCprepare(brca_query_small)
+```
+
+```{r}
+brca_data_small
+```
+
+Printing the object shows:
+
+-   60660 genes (rows)
+
+-   20 samples (columns)
+
+The SummarizedExperiment object has three interconnected components:
+
+1.  Expression matrix (assay)
+    -   A numeric matrix of genes × samples
+
+    -   Each entry is typically an integer count of reads mapping to a gene
+2.  Sample metadata (colData)
+    -   A table describing each sample (columns in the matrix)
+3.  Feature (gene) metadata (rowData)
+    -   A table describing each gene (rows in the matrix)
+
+```{r}
+expr_matrix <- assay(brca_data_small)        
+sample_metadata <- colData(brca_data_small)  
+feature_metadata <- rowData(brca_data_small) 
+```
+
+#### Exploring Gene Metadata and Filtering for Protein-Coding Genes
+
+The feature_metadata (rowData of the SummarizedExperiment) contains information about each gene. It’s good practice to explore the metadata before analysis.
+
+```{r}
+kable(head(feature_metadata))
+```
+
+Here you can see columns like:
+
+-   gene_id: Ensembl ID
+
+-   gene_name: gene symbol
+
+-   gene_type: type of gene (protein_coding, lncRNA, pseudogene, etc.)
+
+Filter to keep only protein-coding genes:
+
+```{r}
+# Keep only protein-coding genes
+brca_data_small_pc <- brca_data_small[rowData(brca_data_small)$gene_type == "protein_coding", ]
+
+# Check how many genes remain
+brca_data_small_pc
+```
+
+After this step, the SummarizedExperiment contains only protein-coding genes.
+
+#### Splitting Into Tumor and Normal SummarizedExperiments
+
+::: {.callout-tip title="Exercise"}
+Now try to divide the dataset into two smaller objects yourself:
+
+-   one containing only the 10 tumor samples
+
+-   one containing only the 10 normal samples
+:::
+
+```{r}
+#| code-fold: true
+tumor_SE <- brca_data_small_pc[, colData(brca_data_small_pc)$sample_type == "Primary Tumor"]
+normal_SE <- brca_data_small_pc[, colData(brca_data_small_pc)$sample_type == "Solid Tissue Normal"]
+```
+
+#### Saving the Dataset
+
+```{r}
+#| eval: false
+
+saveRDS(brca_data_small_pc, file = "brca_data_small.rds")
+```
+
+### Access via the Webportal
+
+There is already a step-by-step guide on how to use the website [here](https://bioinformatics.ccr.cancer.gov/docs/btep-coding-club/CC2024/TCGA/TCGA_download/#steps-to-download-data-from-the-gdc). You can try to follow along the guide and select the filters we used in this notebook to download the data by choosing download cart in the last step.
