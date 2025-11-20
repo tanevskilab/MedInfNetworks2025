@@ -3,6 +3,7 @@ title: "TCGA Data Visualization"
 editor: visual
 format:
   html:
+    embed-resources: true
     toc: true
     toc-location: left
     toc-title: "Contents"
@@ -13,12 +14,17 @@ format:
 ## Loading the BRCA Dataset for Visualization
 
 In this notebook, we will explore and visualize RNA-seq data from TCGA-BRCA that we previously downloaded and prepared. Before creating plots, we need to load the required R packages and the prepared dataset.
+```{r}
+#| eval: false
+BiocManager::install("edgeR")
+```
 
 ```{r}
 #| message: false
 #| warning: false
 library(tidyverse)
 library(SummarizedExperiment)
+library(edgeR)
 ```
 
 ```{r}
@@ -94,13 +100,13 @@ ggplot(as.data.frame(sample_metadata),
 
 ```
 
-Notice that normal (healthy) tissue samples have a pathologic stage assigned. This likely reflects metadata inheritance from the donor and does not represent an actual tumor stage. Always carefully check metadata before using it for analysis."
+Notice that normal (healthy) tissue samples have a pathologic stage assigned. This likely reflects metadata inheritance from the donor and does not represent an actual tumor stage. Always carefully check metadata before using it for analysis.
 
 </details>
 
 ### Basic Expression Statistics
 
-Next, we examine basic statistics of the log-transformed expression data to get a sense of sample distributions.
+Before diving into sample-level explorations, we first log-transform the raw counts. This stabilizes variance and makes the data more suitable for visualization.
 
 ```{r}
 logdata <- log2(expr_matrix + 1)
@@ -117,8 +123,22 @@ c_median = c_median,
 c_std = c_std,
 rng = rng
 )
+```
 
-statplot <- ggplot(sumstats, aes(x = rng, y = c_median)) +
+::: {.callout-tip title="Exercise"}
+Why do we add 1 when performing the log-transformation?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+We add 1 to a value before performing a log-transformation to handle zero values, because the logarithm of zero is undefined.
+
+</details>
+
+```{r}
+ggplot(sumstats, aes(x = rng, y = c_median)) +
 geom_point(aes(color = "median")) +
 geom_point(aes(x = rng, y = c_mean, color = "mean")) +
 ylim(range(c(c_mean - c_std, c_mean + c_std))) +
@@ -128,15 +148,11 @@ theme_bw() +
 labs(color = "Statistic")
 ```
 
-```{r}
-statplot
-```
-
 This plot shows the mean and median expression for each sample. It provides a quick overview of sample-level expression variation.
 
 ### Expression Boxplots by Tissue Type
 
-We convert the expression matrix to a long format for plotting:
+We want to visualize the distribution of gene expression values for each sample, separated by tissue type (tumor vs. normal). To do this, we first convert the expression matrix into a long format suitable for `ggplot2`.
 
 ```{r}
 long.data <- logdata %>%
@@ -168,9 +184,25 @@ ggplot(long.data, aes(x = sample_ordered, y = expr, fill = sample_type)) +
 
 Each boxplot shows the distribution of log2-transformed expression values for each sample. Coloring by sample_type allows us to visually compare tumor and normal samples.
 
+::: {.callout-tip title="Exercise"}
+What information do the boxes represent?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+Each box represents the interquartile range (IQR), containing the middle 50% of expression values for that sample.
+
+The line inside the box shows the median expression.
+
+Whiskers extend to the most extreme points within 1.5× IQR, and points outside this range are considered outliers.
+
+</details>
+
 ### Expression Distribution: Histograms and Density Plots
 
-We can inspect the expression distribution for individual samples using histograms and density plots.
+Histograms and density plots are useful for inspecting the distribution of expression values within individual samples. They allow us to see the overall shape of the data, including lowly expressed and highly expressed genes.
 
 ```{r}
 # Select one sample to visualize
@@ -187,7 +219,7 @@ ggplot(data_sample_name, aes(x = expr)) +
        y = "Density")
 ```
 
-We can also visualize multiple samples together using facet_wrap:
+We can also compare multiple samples simultaneously using facet_wrap:
 
 ```{r}
 # Now do the same for a small subset of samples (e.g., first 4 samples)
@@ -205,4 +237,114 @@ ggplot(data_sample_name, aes(x = expr)) +
        y = "Density")
 ```
 
-The histograms reveal that many genes have zero counts (spike at 0), followed by a gap and a long tail of higher expressed genes.
+Observations: Many genes have zero counts (spike at 0), followed by a gap, then a long tail of highly expressed genes.
+
+::: {.callout-tip title="Exercise"}
+Why is it problematic to have many genes with zero counts, and what can we do about it?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+-   Genes with zero counts across most samples provide little information and can introduce noise in downstream analyses like PCA or differential expression.
+
+-   One common solution is to filter out lowly expressed genes, e.g., keeping only genes with counts above a minimum threshold in a certain number of samples.
+
+</details>
+
+### Filtering Lowly Expressed Genes and Re-Plotting Expression Distributions
+
+Many genes in RNA-seq data have zero or very low counts across samples. These genes can add noise to analyses like PCA or differential expression testing. To address this, we filter out lowly expressed genes before further analysis.
+
+We will use the `edgeR` package to calculate counts per million (CPM) and filter genes. We define lowly expressed genes as those with CPM ≤ 0.3 in most samples. Here, we keep genes that are expressed (CPM > 0.3) in at least 2 samples:
+```{r}
+thresh <- cpm(expr_matrix) > 0.3
+keep <- rowSums(thresh) >= 2
+summary(keep)
+```
+::: {.callout-tip title="Exercise"}
+Why do we do CPM normalization?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+CPM normalization accounts for differences in sequencing depth between samples. Without this, samples with higher total read counts would appear to have globally higher expression, biasing downstream analyses like PCA or differential expression.
+
+</details>
+
+Next, we log-transform the filtered CPM values for visualization:
+```{r}
+logcounts <- cpm(expr_matrix[keep,],log=TRUE)
+```
+
+We convert the log-transformed data to long format for plotting:
+```{r}
+long.data <- logcounts %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  pivot_longer(-gene, names_to = "sample", values_to = "expr")
+```
+Finally, we visualize the expression distributions for a subset of samples:
+```{r}
+
+# Select first 4 samples
+sample_name <- unique(long.data$sample)[1:4]
+data_sample_name <- long.data %>% filter(sample %in% sample_name)
+
+# Histogram + density faceted by sample
+ggplot(data_sample_name, aes(x = expr)) +
+  geom_histogram(aes(y = ..density..), color = "black", fill = "grey", bins = 50) +
+  geom_density(alpha = 0.2, fill = "#FF6666") +
+  facet_wrap(~sample) +
+  theme_bw() +
+  labs(title = "Expression Distribution Across Selected Samples",
+       x = "log2(cpm + 1)",
+       y = "Density")
+```
+::: {.callout-tip title="Exercise"}
+Why do we sometimes see negative values in the log2(CPM + 1) plots?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+CPM normalization accounts for differences in sequencing depth between samples. Without this, samples with higher total read counts would appear to have globally higher expression, biasing downstream analyses like PCA or differential expression.
+
+</details>
+
+### Principal Component Analysis (PCA) of Filtered Expression Data
+
+After filtering lowly expressed genes, we can perform PCA to explore global patterns in the data. PCA reduces the dimensionality of the dataset, capturing the major sources of variation across samples.
+
+We transpose the matrix so that samples are rows and genes are columns as needed for the PCA
+
+```{r}
+pca <- prcomp(t(logcounts), center = TRUE, scale. = TRUE)
+summary(pca)
+```
+Convert PCA results to a data frame for plotting:
+```{r}
+pca_df <- as.data.frame(pca$x)
+```
+
+Add sample metadata for plotting:
+```{r}
+pca_df <- pca_df %>%
+  rownames_to_column("sample") %>%
+  left_join(
+    as.data.frame(sample_metadata) %>% select(-sample) %>% rownames_to_column("sample") %>% select(sample, definition),
+    by = "sample"
+  )
+```
+Plot the first two principal components:
+```{r}
+ggplot(pca_df, aes(PC1, PC2, color = definition)) +
+  geom_point() +
+  theme_bw()
+```
+We can see that the first principal component (PC1) separates the samples clearly into healthy tissue versus tumor samples. This indicates that the largest source of variation in the dataset corresponds to tissue type, reflecting the fundamental biological differences between normal and cancerous breast tissue.
+
