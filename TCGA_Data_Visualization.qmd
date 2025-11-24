@@ -598,8 +598,11 @@ Next, we obtain the PROGENy model. The network encodes weighted relationships be
 ```{r}
 #| message: false
 #| warning: false
-net <- get_progeny(organism = 'human', top = 500)
-kable(head(net))
+# net_progeny <- get_progeny(organism = 'human', top = 500)
+# saveRDS(net_progeny, file = "net_progeny.rds")
+
+net_progeny <- readRDS("net_progeny.rds")
+kable(head(net_progeny))
 ```
 
 #### Pathway Activities per Sample
@@ -608,7 +611,7 @@ We can estimate pathway activities at the sample level using multivariate linear
 
 ```{r}
 sample_acts <- run_mlm(mat = logcounts, 
-                              net = net, 
+                              net = net_progeny, 
                               .source = 'source', 
                               .target = 'target',
                               .mor = 'weight', 
@@ -654,7 +657,7 @@ We can also estimate contrast-level pathway activities directly from the differe
 ```{r}
 # Run mlm
 contrast_acts <- run_mlm(mat  =deg, 
-                                net = net, 
+                                net = net_progeny, 
                                 .source = 'source', 
                                 .target = 'target',
                                 .mor = 'weight', 
@@ -726,14 +729,17 @@ In addition to pathway analysis, we can infer transcription factor (TF) activiti
 
 We first load the CollecTRI network for human:
 ```{r}
-net <- get_collectri(organism = 'human', 
-                                split_complexes = FALSE)
+# net_collectri <- get_collectri(organism = 'human', 
+#                                 split_complexes = FALSE)
+# 
+# saveRDS(net_collectri, file = "net_collectri.rds")
+net_collectri <- readRDS("net_collectri.rds")
 ```
 #### Transcription factor Activities per Sample
 Similar to the pathway analysis, we can estimate TF activity at the sample level using multivariate linear modeling (MLM). Here, the input is the filtered logcounts expression matrix:
 ```{r}
 sample_acts <- run_mlm(mat = logcounts, 
-                              net = net, 
+                              net = net_collectri, 
                                   .source = 'source', 
                                   .target = 'target',
                                   .mor = 'mor', 
@@ -786,7 +792,7 @@ pheatmap::pheatmap(mat = sample_acts_mat,
 We can also infer TF activities from differential expression statistics (contrast-level), which summarizes how each TF is activated or repressed between conditions. Here, we use the univariate linear model (ULM) approach:
 ```{r}
 contrast_acts <- run_ulm(mat = deg, 
-                                    net = net, 
+                                    net = net_collectri, 
                                     .source = 'source', 
                                     .target = 'target',
                                     .mor='mor', 
