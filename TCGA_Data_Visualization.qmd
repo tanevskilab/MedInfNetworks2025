@@ -14,21 +14,90 @@ format:
 ## Loading the BRCA Dataset for Visualization
 
 In this notebook, we will explore and visualize RNA-seq data from TCGA-BRCA that we previously downloaded and prepared. Before creating plots, we need to load the required R packages and the prepared dataset.
+
+Depending on your R-version, you might need to downgrade to 4.4.3 to install `OmnipathR`. If you have problems with this, please ask.
+
 ```{r}
 #| eval: false
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+if (!require("tidyverse", quietly = TRUE))
+    install.packages("tidyverse")
 BiocManager::install("edgeR")
+BiocManager::install("DESeq2")
+BiocManager::install("apeglm")
+BiocManager::install("decoupleR")
+BiocManager::install("OmnipathR")
+install.packages("ggrepel")
+install.packages("pheatmap")
 ```
 
 ```{r}
 #| message: false
 #| warning: false
+library(DESeq2)
+library(decoupleR)
 library(tidyverse)
 library(SummarizedExperiment)
 library(edgeR)
+library(ggrepel)
+library(knitr)
 ```
 
 ```{r}
-brca_data_small <- readRDS("brca_data_small.rds")
+brca_data <- readRDS("brca_data_small.rds")
+```
+
+### Removing Duplicated Genes
+
+Last week, we filtered out all non-protein-coding genes. Before proceeding with the data analysis, it’s important to check for duplicated genes.
+
+```{r}
+rownames(brca_data)[1]
+```
+
+This shows how the Ensembl IDs are formatted. The part before the dot represents the gene ID, while the number after the dot is the version number. If we search for duplicates including the version number, we might miss true duplicates because version numbers differ (e.g., "ENSG00000000003.15" vs "ENSG00000000003.16"). To avoid this, we first remove the version numbers:
+
+```{r}
+rownames_brca <- sub("\\..*$", "", rownames(brca_data))
+duplicated_ids <- rownames_brca[duplicated(rownames_brca)]
+duplicated_ids
+```
+
+We find 18 duplicated gene IDs. Next, let’s check if they differ in version numbers:
+
+```{r}
+pattern <- paste0("^(", paste(duplicated_ids, collapse="|"), ")")
+
+# Find matching rows
+matching_rows <- rownames(brca_data)[
+  grepl(pattern, rownames(brca_data))
+]
+
+matching_rows
+```
+
+We observe that each duplicated gene has two entries: one with a standard version number and one with a version number followed by \_PAR_Y. PAR refers to the pseudoautosomal regions: areas where the X and Y chromosomes share homologous sequences. \_Y indicates the gene is located on the Y chromosome.
+
+::: {.callout-tip title="Exercise"}
+Does it make sense to keep these genes in our analysis? Why or why not?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+It does not make sense to keep these genes, since our samples are from female patients. Therefore, we can safely remove these Y-chromosome genes:
+
+```{r}
+brca_data <- brca_data[!grepl("_PAR_Y$", rownames(brca_data)), ]
+```
+
+</details>
+
+```{r}
+# Using gene names instead of ensmbl IDs for further analysis
+rownames(brca_data) <- rowData(brca_data)$gene_name 
 ```
 
 ::: {.callout-tip title="Exercise"}
@@ -37,12 +106,12 @@ Do you remember how to access the three components of the SummarizedExperiment o
 
 ```{r}
 #| code-fold: true
-expr_matrix <- assay(brca_data_small)        
-sample_metadata <- colData(brca_data_small)  
-feature_metadata <- rowData(brca_data_small) 
+expr_matrix <- assay(brca_data)        
+sample_metadata <- colData(brca_data)  
+feature_metadata <- rowData(brca_data) 
 ```
 
-## Visualization of the SummarizedExperiment Object
+## Visualization and Preprocessing of the SummarizedExperiment Object
 
 ### Exploring Pathologic Stage in the BRCA Dataset
 
@@ -61,7 +130,7 @@ ggplot(as.data.frame(sample_metadata),
   )
 ```
 
-We can also compare tumor and normal samples to see how stage information relates to tissue type. By coloring the bars by "tissue_type", we can immediately identify which bars represent tumors and which represent normal samples:
+To compare tumor and normal samples, we can color the bars by tissue_type. This allows us to quickly see which bars represent tumors and which represent normal tissue:
 
 ```{r}
 
@@ -76,10 +145,10 @@ ggplot(as.data.frame(sample_metadata),
   )
 ```
 
-Tumor samples will have stage information, while normal tissue are assigned to NA
+As expected, tumor samples have stage information, while normal tissue samples are assigned NA.
 
 ::: {.callout-tip title="Exercise"}
-What happens when you plot "ajcc_pathologic_stage" as the x-axis and color after "tissue_type"? Does the result make sense?
+What happens when you plot `ajcc_pathologic_stage` on the x-axis and color by `tissue_type`? Does the result make sense?
 :::
 
 <details>
@@ -100,7 +169,7 @@ ggplot(as.data.frame(sample_metadata),
 
 ```
 
-Notice that normal (healthy) tissue samples have a pathologic stage assigned. This likely reflects metadata inheritance from the donor and does not represent an actual tumor stage. Always carefully check metadata before using it for analysis.
+Notice that normal (healthy) tissue samples have a pathologic stage assigned. This likely reflects metadata inheritance from the donor rather than an actual tumor stage. Always carefully check metadata before using it for downstream analyses.
 
 </details>
 
@@ -133,7 +202,7 @@ Why do we add 1 when performing the log-transformation?
 
 <summary>Show answer</summary>
 
-We add 1 to a value before performing a log-transformation to handle zero values, because the logarithm of zero is undefined.
+We add 1 to each value before taking the logarithm to handle zeros, because the logarithm of zero is undefined.
 
 </details>
 
@@ -148,32 +217,29 @@ theme_bw() +
 labs(color = "Statistic")
 ```
 
-This plot shows the mean and median expression for each sample. It provides a quick overview of sample-level expression variation.
+This plot shows the mean and median expression for each sample. It provides a quick overview of the variation in expression across samples, helping us identify outliers or samples with unusual distributions.
 
 ### Expression Boxplots by Tissue Type
 
-We want to visualize the distribution of gene expression values for each sample, separated by tissue type (tumor vs. normal). To do this, we first convert the expression matrix into a long format suitable for `ggplot2`.
+To visualize the distribution of gene expression values for each sample, separated by tissue type (tumor vs. normal)we first reshape the expression matrix into a long format suitable for `ggplot2`.
 
 ```{r}
-long.data <- logdata %>%
+long_logdata <- logdata %>%
   as.data.frame() %>%
   rownames_to_column(var = "gene") %>%
-  pivot_longer(-gene, names_to = "sample", values_to = "expr")
+  pivot_longer(-gene, names_to = "barcode", values_to = "expr")
 
 # Add tissue information from sample metadata
-long.data <- long.data %>%
+long_logdata <- long_logdata %>%
   left_join(as.data.frame(sample_metadata) %>%
-              select(-sample) %>%
-              rownames_to_column(var = "sample") %>%
-              select(sample, sample_type),
-            by = "sample") %>%
-  arrange(sample_type, sample) %>%  # order rows
-  mutate(sample_ordered = factor(sample, levels = unique(sample)))  # factor for plotting
+              select(barcode, sample_type), by = "barcode") %>%
+  arrange(sample_type, barcode) %>%  # order rows
+  mutate(sample_ordered = factor(barcode, levels = unique(barcode)))  # factor for plotting
 
 ```
 
 ```{r}
-ggplot(long.data, aes(x = sample_ordered, y = expr, fill = sample_type)) +
+ggplot(long_logdata, aes(x = sample_ordered, y = expr, fill = sample_type)) +
   geom_boxplot() +
   theme_bw() +
   labs(x = "Sample", y = "log2(expr + 1)", fill = "Tissue Type",
@@ -182,7 +248,7 @@ ggplot(long.data, aes(x = sample_ordered, y = expr, fill = sample_type)) +
 
 ```
 
-Each boxplot shows the distribution of log2-transformed expression values for each sample. Coloring by sample_type allows us to visually compare tumor and normal samples.
+Each boxplot shows the distribution of log~2~-transformed expression values for a single sample. Coloring by sample_type makes it easy to compare expression patterns between tumor and normal tissues at a glance.
 
 ::: {.callout-tip title="Exercise"}
 What information do the boxes represent?
@@ -206,8 +272,8 @@ Histograms and density plots are useful for inspecting the distribution of expre
 
 ```{r}
 # Select one sample to visualize
-sample_name <- long.data$sample[1]  # pick first sample, or specify your own
-data_sample_name <- long.data %>% filter(sample == sample_name)
+sample_name <- long_logdata$barcode[1]  # pick first sample, or specify your own
+data_sample_name <- long_logdata %>% filter(barcode == sample_name)
 
 # Histogram + density for a single sample
 ggplot(data_sample_name, aes(x = expr)) +
@@ -223,21 +289,21 @@ We can also compare multiple samples simultaneously using facet_wrap:
 
 ```{r}
 # Now do the same for a small subset of samples (e.g., first 4 samples)
-sample_name <- unique(long.data$sample)[1:4]
-data_sample_name <- long.data %>% filter(sample %in% sample_name)
+sample_name <- unique(long_logdata$barcode)[1:4]
+data_sample_name <- long_logdata %>% filter(barcode %in% sample_name)
 
 # Histogram + density faceted by sample
 ggplot(data_sample_name, aes(x = expr)) +
   geom_histogram(aes(y = ..density..), color = "black", fill = "grey", bins = 50) +
   geom_density(alpha = 0.2, fill = "#FF6666") +
-  facet_wrap(~sample) +
+  facet_wrap(~barcode) +
   theme_bw() +
   labs(title = "Expression Distribution Across Selected Samples",
        x = "log2(expr + 1)",
        y = "Density")
 ```
 
-Observation: Many genes have zero counts (spike at 0), followed by a gap, then a long tail of highly expressed genes.
+A common pattern emerges: many genes have zero counts (a clear spike at 0), followed by a gap, and then a long tail of highly expressed genes.
 
 ::: {.callout-tip title="Exercise"}
 Why is it problematic to have many genes with zero counts, and what can we do about it?
@@ -255,14 +321,17 @@ Why is it problematic to have many genes with zero counts, and what can we do ab
 
 ### Filtering Lowly Expressed Genes and Re-Plotting Expression Distributions
 
-Many genes in RNA-seq data have zero or very low counts across samples. These genes can add noise to analyses like PCA or differential expression testing. To address this, we filter out lowly expressed genes before further analysis.
+Many genes in RNA-seq data have zero or very low counts across samples. These genes contribute little biological insight and can introduce noise into downstream analyses such as PCA or differential expression testing. To mitigate this, we filter out lowly expressed genes before further analysis.
 
-We will use the `edgeR` package to calculate counts per million (CPM) and filter genes. We define lowly expressed genes as those with CPM ≤ 0.3 in most samples. Here, we keep genes that are expressed (CPM > 0.3) in at least 2 samples:
+We use the `edgeR` package to calculate counts per million (CPM) and filter genes.The `filterByExpr` function provides a data-driven way to determine which genes have sufficient expression:
+
 ```{r}
-thresh <- cpm(expr_matrix) > 0.3
-keep <- rowSums(thresh) >= 2
+keep <- filterByExpr(expr_matrix)
 summary(keep)
 ```
+
+In theory, one could set a manual expression threshold, but this choice is often arbitrary. To better understand how `filterByExpr` makes its decision, consult the function’s documentation (place the cursor on the function and press F1).
+
 ::: {.callout-tip title="Exercise"}
 Why do we do CPM normalization?
 :::
@@ -271,39 +340,44 @@ Why do we do CPM normalization?
 
 <summary>Show answer</summary>
 
-CPM normalization accounts for differences in sequencing depth between samples. Without this, samples with higher total read counts would appear to have globally higher expression, biasing downstream analyses like PCA or differential expression.
+CPM normalization adjusts for differences in sequencing depth between samples. CPM rescales counts so that samples become comparable, ensuring that downstream analyses reflect biological differences rather than differences in library size.
 
 </details>
 
 Next, we log-transform the filtered CPM values for visualization:
+
 ```{r}
 logcounts <- cpm(expr_matrix[keep,],log=TRUE,prior.count = 1)
 ```
 
 We convert the log-transformed data to long format for plotting:
+
 ```{r}
-long.data <- logcounts %>%
+long_logdata <- logcounts %>%
   as.data.frame() %>%
   rownames_to_column(var = "gene") %>%
-  pivot_longer(-gene, names_to = "sample", values_to = "expr")
+  pivot_longer(-gene, names_to = "barcode", values_to = "expr")
 ```
+
 Finally, we visualize the expression distributions for a subset of samples:
+
 ```{r}
 
 # Select first 4 samples
-sample_name <- unique(long.data$sample)[1:4]
-data_sample_name <- long.data %>% filter(sample %in% sample_name)
+sample_name <- unique(long_logdata$barcode)[1:4]
+data_sample_name <- long_logdata %>% filter(barcode %in% sample_name)
 
 # Histogram + density faceted by sample
 ggplot(data_sample_name, aes(x = expr)) +
   geom_histogram(aes(y = ..density..), color = "black", fill = "grey", bins = 50) +
   geom_density(alpha = 0.2, fill = "#FF6666") +
-  facet_wrap(~sample) +
+  facet_wrap(~barcode) +
   theme_bw() +
   labs(title = "Expression Distribution Across Selected Samples",
        x = "log2(cpm + 1)",
        y = "Density")
 ```
+
 ::: {.callout-tip title="Exercise"}
 Why do we see negative values in the log2(CPM + 1) plots?
 :::
@@ -312,41 +386,478 @@ Why do we see negative values in the log2(CPM + 1) plots?
 
 <summary>Show answer</summary>
 
-CPM normalization accounts for differences in sequencing depth between samples. Without this, samples with higher total read counts would appear to have globally higher expression, biasing downstream analyses like PCA or differential expression.
+Negative values occur because CPM values can be less than 1 for lowly expressed genes. When we compute log2(CPM + 1) on a value less than 1, the log₂ value becomes negative.
 
 </details>
 
-### Principal Component Analysis (PCA) of Filtered Expression Data
+## Principal Component Analysis (PCA) of Filtered Expression Data
 
-After filtering lowly expressed genes, we can perform PCA to explore global patterns in the data. PCA reduces the dimensionality of the dataset, capturing the major sources of variation across samples.
+After filtering out lowly expressed genes, we can perform PCA to explore global patterns in gene expression. PCA reduces the dimensionality of the dataset by identifying combinations of genes (principal components) that explain the major sources of variation across samples.
 
-We transpose the matrix so that samples are rows and genes are columns as needed for the PCA
+Before applying PCA, we transpose the expression matrix so that samples are rows and genes are columns, as required for the PCA:
 
 ```{r}
 pca <- prcomp(t(logcounts), center = TRUE, scale. = TRUE)
 summary(pca)
 ```
+
 Convert PCA results to a data frame for plotting:
+
 ```{r}
 pca_df <- as.data.frame(pca$x)
 ```
 
 Add sample metadata for plotting:
+
 ```{r}
 pca_df <- pca_df %>%
-  rownames_to_column("sample") %>%
+  rownames_to_column("barcode") %>%
   left_join(
-    as.data.frame(sample_metadata) %>% select(-sample) %>% rownames_to_column("sample") %>% select(sample, definition),
-    by = "sample"
+    as.data.frame(sample_metadata) %>% select(barcode, tissue_type, paper_BRCA_Subtype_PAM50),
+    by = "barcode"
   )
 ```
+
 Plot the first two principal components:
+
 ```{r}
-ggplot(pca_df, aes(PC1, PC2, color = definition)) +
+ggplot(pca_df, aes(PC1, PC2, color = tissue_type)) +
   geom_point() +
   theme_bw()
 ```
+
 We can see that the first principal component (PC1) separates the samples clearly into healthy tissue versus tumor samples. This indicates that the largest source of variation in the dataset corresponds to tissue type, reflecting the fundamental biological differences between normal and cancerous breast tissue.
 
+We can also examine how known molecular breast cancer subtypes behave in PCA space by coloring samples according to their PAM50 subtype:
+
+```{r}
+ggplot(pca_df, aes(PC1, PC2, color = paper_BRCA_Subtype_PAM50)) +
+  geom_point() +
+  theme_bw()
+```
+
+## Differential Gene Expression (DGE) Analysis
+
+To identify genes that are differentially expressed between tumor and normal tissue, we use the `DESeq2` package, a widely adopted tool for RNA-seq analysis. `DESeq2` models raw count data using negative binomial statistics, accounting for differences in sequencing depth and biological variability. It provides methods for:
+
+-   Normalization of counts across samples
+
+-   Estimation of gene-wise dispersion
+
+-   Hypothesis testing for differential expression
+
+-   Log2 fold change shrinkage for more stable estimates
+
+This workflow allows us to identify genes that are significantly upregulated or downregulated in tumors relative to normal tissue, which can highlight potential biomarkers or therapeutic targets.
+
+```{r}
+#| message: false
+#| warning: false
+
+# Create DESeqDataSet with tissue type as the variable of interest
+brca_DEseq <- DESeqDataSet(brca_data[keep,], design = ~ tissue_type)
+brca_DEseq
+```
+
+Next, we set Normal as the reference level so that the fold changes are interpreted as Tumor vs Normal.
+
+```{r}
+brca_DEseq$tissue_type <- relevel(brca_DEseq$tissue_type, ref = "Normal")
+```
+
+DESeq2 then performs a multi-step procedure:
+
+-   Normalization of sample sequencing depth
+
+-   Estimation of gene-wise dispersion
+
+-   Fitting generalized linear models
+
+-   Computing log2 fold changes (LFC) and adjusted p-values
+
+```{r}
+brca_DEseq <- DESeq(brca_DEseq, useT = TRUE)
+DGE_res <- results(brca_DEseq, contrast=c("tissue_type","Tumor","Normal"))
+```
+
+```{r}
+summary(DGE_res)
+```
+
+Raw log2 fold changes can be unstable for genes with low counts. `DESeq2` provides shrinkage methods, such as "apeglm", to stabilize these estimates:
+
+```{r}
+DGE_res_shrink <- lfcShrink(brca_DEseq, coef = "tissue_type_Tumor_vs_Normal", type = "apeglm")
+```
+
+MA plots visualize the relationship between mean expression and log2 fold change. They help identify genes with strong changes relative to their expression level.
+
+```{r}
+BiocGenerics::plotMA(DGE_res, ylim=c(-2,2))
+```
+
+```{r}
+BiocGenerics::plotMA(DGE_res_shrink, ylim=c(-2,2))
+```
+
+::: {.callout-tip title="Exercise"}
+Can you spot the difference the shrinkage of the LFC? Why is this performed?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+For genes with low counts, the raw log2 fold changes can be very noisy and exaggerated. Shrinkage pulls these genes LFC values closer to zero (visible in the plots), reducing noise and providing more reliable, interpretable estimates of differential expression.
+
+</details>
+
+The volcano plot provides a combined view of fold change and significance, allowing rapid identification of biologically relevant genes.
+
+```{r}
+# Prepare results table
+volcano_df <- as.data.frame(DGE_res_shrink) %>%
+  rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_p = -log10(padj),
+    regulation = case_when(
+      padj < 0.05 & log2FoldChange > 1  ~ "Upregulated",
+      padj < 0.05 & log2FoldChange < -1 ~ "Downregulated",
+      TRUE ~ "Not significant"
+    )
+  )
+
+# Select top genes to label (top 10 smallest adjusted p-values)
+top_genes <- volcano_df %>%
+  arrange(padj) %>%
+  slice_head(n = 10)
+
+ggplot(volcano_df, aes(x = log2FoldChange, y = neg_log10_p)) +
+  geom_point(aes(color = regulation), alpha = 0.7, size = 1.5) +
+  scale_color_manual(values = c(
+    "Upregulated" = "red",
+    "Downregulated" = "blue",
+    "Not significant" = "grey"
+  )) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_text_repel(
+    data = top_genes,
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 20
+  ) +
+  labs(
+    title = "Volcano Plot",
+    x = "Log2 Fold Change",
+    y = "-Log10(adjusted p-value)",
+    color = "Regulation"
+  ) +
+  theme_minimal()
+
+```
+
+::: {.callout-tip title="Exercise"}
+How is the volcano plot interpreted?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+
+-   X-axis: magnitude of change (log2 fold change)
+
+-   Y-axis: statistical significance (-log10 adjusted p-value)
+
+-   Top right points: significantly upregulated in tumors
+
+-   Top left points: significantly downregulated in tumors
+
+-   Grey points: not statistically significant
+
+-   Dashed lines: thresholds for fold change (\|LFC\| ≥ 1) and significance (padj \< 0.05)
+
+-   The labeled points highlight the most significant genes based on adjusted p-values.
+
+</details>
+
+If you want, you can look up these genes later and see if there are any papers mentioning a connection with BRCA.
+
+## Foot Print Analysis 
+### Pathway signaling activities with PROGENy
+In this section we estimate pathway activities using PROGENy, a comprehensive resource containing a curated collection of pathways and their target genes, with weights for each interaction. You can find a vignette for its usage with decoupleR and a description of each pathway [here](https://saezlab.github.io/decoupleR/articles/pw_bk.html#progeny-model). 
+
+From the DESeq2 results we extract the gene-level statistics needed for footprint-based inference:
+```{r}
+deg <- as.matrix(setNames(DGE_res$stat, rownames(DGE_res))[
+    !is.na(DGE_res$stat)
+])
+```
+
+Next, we obtain the PROGENy model. The network encodes weighted relationships between pathways (sources) and their responsive genes (targets):
+```{r}
+#| message: false
+#| warning: false
+net <- get_progeny(organism = 'human', top = 500)
+kable(head(net))
+```
+
+#### Pathway Activities per Sample
+
+We can estimate pathway activities at the sample level using multivariate linear modeling (MLM) implemented in decoupleR. Here, the filtered logcounts are used as input:
+
+```{r}
+sample_acts <- run_mlm(mat = logcounts, 
+                              net = net, 
+                              .source = 'source', 
+                              .target = 'target',
+                              .mor = 'weight', 
+                              minsize = 5)
+```
+
+```{r}
+kable(head(sample_acts))
+```
+The output contains a score for each PROGENy pathway in every sample. To visualize the patterns, we transform the data into a matrix, scale each pathway for better visualization, and generate a heatmap:
+```{r}
+# Transform to wide matrix
+sample_acts_mat <- sample_acts %>%
+                   pivot_wider(id_cols = 'condition', 
+                                      names_from = 'source',
+                                      values_from = 'score') %>%
+                   column_to_rownames('condition') %>%
+                   as.matrix()
+
+# Scale per feature
+sample_acts_mat <- scale(sample_acts_mat)
+
+# Color scale
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu"))
+colors.use <- colorRampPalette(colors = colors)(100)
+
+my_breaks <- c(seq(-2, 0, length.out = ceiling(100 / 2) + 1),
+              seq(0.05,2, length.out = floor(100 / 2)))
+
+# Plot
+pheatmap::pheatmap(mat = sample_acts_mat,
+                   color = colors.use,
+                   border_color = "white",
+                   breaks = my_breaks,
+                   cellwidth = 12,
+                   cellheight = 12,
+                   treeheight_row = 10,
+                   treeheight_col = 10)
+```
+#### Pathway Activities from Differential Statistics
+We can also estimate contrast-level pathway activities directly from the differential expression statistics. This provides a summary of which pathways are up- or down-regulated between conditions:
+
+```{r}
+# Run mlm
+contrast_acts <- run_mlm(mat  =deg, 
+                                net = net, 
+                                .source = 'source', 
+                                .target = 'target',
+                                .mor = 'weight', 
+                                minsize = 5)
+
+kable(head(contrast_acts))
+```
+
+Finally, we plot the pathway scores as a bar chart to highlight pathways with the strongest inferred changes:
+```{r}
+# Plot
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu")[c(2, 10)])
+
+p <- ggplot(data = contrast_acts, 
+                     mapping = aes(x = stats::reorder(source, score), 
+                                            y = score)) + 
+     geom_bar(mapping = aes(fill = score),
+                       color = "black",
+                       stat = "identity") +
+     scale_fill_gradient2(low = colors[1], 
+                                   mid = "whitesmoke", 
+                                   high = colors[2], 
+                                   midpoint = 0) + 
+     theme_minimal() +
+     theme(axis.title = element_text(face = "bold", size = 12),
+              axis.text.x = element_text(angle = 45, 
+                                                  hjust = 1, 
+                                                  size = 10, 
+                                                  face = "bold"),
+              axis.text.y = element_text(size = 10, 
+                                                  face = "bold"),
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank()) +
+     xlab("Pathways")
+
+p
+```
 
 
+::: {.callout-tip title="Exercise"}
+Which pathways are most strongly up- or down-regulated? Does this pattern match what you would expect based on the biology of your samples?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+Downregulated in tumor samples:
+
+-   p53: regulates cell cycle, apoptosis, DNA repair and tumor suppression.
+
+-   Trail: induces apoptosis.
+
+
+Upregulated in the tumor samples:
+
+-   PI3K: promotes growth and proliferation
+
+-   MAPK: integrates external signals and promotes cell growth and proliferation.
+
+-   JAK-STAT: involved in immunity, cell division, cell death, and tumor formation.
+
+These trends are consistent with the known behavior of tumor cells.
+
+</details>
+
+
+### Transcription factor acitivities with CollecTRI
+In addition to pathway analysis, we can infer transcription factor (TF) activities using CollecTRI, a curated database of TF-target interactions. CollecTRI includes experimentally validated regulatory relationships between TFs (sources) and their target genes (targets), along with mode-of-regulation information (mor), indicating activation or repression.
+
+We first load the CollecTRI network for human:
+```{r}
+net <- get_collectri(organism = 'human', 
+                                split_complexes = FALSE)
+```
+#### Transcription factor Activities per Sample
+Similar to the pathway analysis, we can estimate TF activity at the sample level using multivariate linear modeling (MLM). Here, the input is the filtered logcounts expression matrix:
+```{r}
+sample_acts <- run_mlm(mat = logcounts, 
+                              net = net, 
+                                  .source = 'source', 
+                                  .target = 'target',
+                                  .mor = 'mor', 
+                                  minsize = 5)
+```
+
+The output contains a TF activity score for each TF in every sample. To visualize the most informative TFs, we select those with the largest variability across samples:
+```{r}
+n_tfs <- 25
+
+# Transform to wide matrix
+sample_acts_mat <- sample_acts %>%
+                   pivot_wider(id_cols = 'condition', 
+                                      names_from = 'source',
+                                      values_from = 'score') %>%
+                   column_to_rownames('condition') %>%
+                   as.matrix()
+
+# Get top tfs with more variable means across clusters
+tfs <- sample_acts %>%
+       group_by(source) %>%
+       summarise(std = sd(score)) %>%
+       arrange(-abs(std)) %>%
+       head(n_tfs) %>%
+       pull(source)
+
+sample_acts_mat <- sample_acts_mat[,tfs]
+
+# Scale per sample
+sample_acts_mat <- scale(sample_acts_mat)
+
+# Choose color palette
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu"))
+colors.use <- grDevices::colorRampPalette(colors = colors)(100)
+
+my_breaks <- c(seq(-2, 0, length.out = ceiling(100 / 2) + 1),
+               seq(0.05, 2, length.out = floor(100 / 2)))
+
+# Plot
+pheatmap::pheatmap(mat = sample_acts_mat,
+                   color = colors.use,
+                   border_color = "white",
+                   breaks = my_breaks,
+                   cellwidth = 12,
+                   cellheight = 12,
+                   treeheight_row = 5,
+                   treeheight_col = 5)
+```
+#### Transcription factor Activities from Differential Statistics
+We can also infer TF activities from differential expression statistics (contrast-level), which summarizes how each TF is activated or repressed between conditions. Here, we use the univariate linear model (ULM) approach:
+```{r}
+contrast_acts <- run_ulm(mat = deg, 
+                                    net = net, 
+                                    .source = 'source', 
+                                    .target = 'target',
+                                    .mor='mor', 
+                                    minsize = 5)
+
+```
+To focus on the most strongly altered TFs, we rank TFs based on absolute score and filter for the top 25:
+```{r}
+# Filter top TFs in both signs
+f_contrast_acts <- contrast_acts %>%
+                   mutate(rnk = NA)
+
+msk <- f_contrast_acts$score > 0
+
+f_contrast_acts[msk, 'rnk'] <- rank(-f_contrast_acts[msk, 'score'])
+f_contrast_acts[!msk, 'rnk'] <- rank(-abs(f_contrast_acts[!msk, 'score']))
+
+tfs <- f_contrast_acts %>%
+       arrange(rnk) %>%
+       head(n_tfs) %>%
+       pull(source)
+
+f_contrast_acts <- f_contrast_acts %>%
+                   filter(source %in% tfs)
+```
+Finally, we plot the contrast-level TF activities as a bar chart:
+```{r}
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu")[c(2, 10)])
+
+p <- ggplot(data = f_contrast_acts, 
+                     mapping = aes(x = stats::reorder(source, score), 
+                                            y = score)) + 
+     geom_bar(mapping = aes(fill = score),
+                       color = "black",
+                       stat = "identity") +
+     scale_fill_gradient2(low = colors[1], 
+                                   mid = "whitesmoke", 
+                                   high = colors[2], 
+                                   midpoint = 0) + 
+     theme_minimal() +
+     theme(axis.title = element_text(face = "bold", size = 12),
+              axis.text.x = element_text(angle = 45, 
+                                                  hjust = 1, 
+                                                  size = 10, 
+                                                  face = "bold"),
+              axis.text.y = element_text(size = 10, 
+                                                  face = "bold"),
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank()) +
+     xlab("TFs")
+
+p
+```
+::: {.callout-tip title="Exercise"}
+What is the difference between ULM and MLM methods ?
+:::
+
+<details>
+
+<summary>Show answer</summary>
+ULM (Univariate Linear Model):
+
+-   Tests each TF independently, so you don’t have to worry about highly correlated TFs in the network.
+
+-   However, it can produce false positives and does not account for interactions between TFs.
+
+
+MLM (Multivariate Linear Model):
+
+-   Models all TFs jointly, accounting for overlapping targets and interaction effects.
+
+-   If your network is highly co-linear (some TF pairs have correlation > 0.9, you can check with check_corr(net)), MLM can give unstable results.
+
+</details>
