@@ -74,13 +74,17 @@ display_table <- function(data, caption = NULL) {
     "</div>"
   )
 
-  if (interactive() && requireNamespace("IRdisplay", quietly = TRUE)) {
-    IRdisplay::display_html(scrollable_table)
-  } else {
-    knitr::asis_output(scrollable_table)
+  if (isTRUE(getOption("knitr.in.progress"))) {
+    return(knitr::asis_output(scrollable_table))
   }
 
-  invisible(data)
+  if (requireNamespace("IRdisplay", quietly = TRUE)) {
+    IRdisplay::display_html(scrollable_table)
+    return(invisible(data))
+  }
+
+  # Fallback for other R notebook environments.
+  structure(scrollable_table, class = c("html", "character"))
 }
 ```
 
