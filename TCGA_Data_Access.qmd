@@ -17,22 +17,28 @@ In this session, we will learn how to use the R programming language to access d
 
 To begin working with TCGA data in R, we need to install several packages. Some packages come from CRAN (the main R repository) and can be installed with `install.packages`, while others (especially bioinformatics tools) come from Bioconductor.
 
-**For Windows users:** If you are using Windows, packages installed from source may require Rtools, a system for compiling R packages. You can download it from the R website [here](https://cran.r-project.org/bin/windows/Rtools/). After installation, restart RStudio.
-
-**Check that your R packages are up to date In RStudio:**
-
-1.  Go to **Tools** → **Check for Package Updates…**
-2.  A window will open showing which packages need updating.
-3.  Click Update to install the newest versions.
-
-Now we can install the packages we need by running the following cell:
+Run the following cell once when starting a new Google Colab runtime. Package installation may take several minutes. You do not need to run it again during the same session. When working locally, the cell only installs packages that are not already available.
 
 ```{r}
-#| eval: false
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-BiocManager::install("TCGAbiolinks", type="source")
-install.packages("tidyverse")
+cran_packages <- c("BiocManager", "tidyverse", "knitr")
+
+missing_cran <- cran_packages[
+  !vapply(cran_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_cran) > 0) {
+  install.packages(missing_cran, repos = "https://cloud.r-project.org")
+}
+
+bioc_packages <- c("TCGAbiolinks", "SummarizedExperiment")
+
+missing_bioc <- bioc_packages[
+  !vapply(bioc_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_bioc) > 0) {
+  BiocManager::install(missing_bioc, ask = FALSE, update = FALSE)
+}
 ```
 
 You can load the installed packages:
@@ -49,24 +55,27 @@ library(tidyverse)
 
 ## Setting up working directory
 
-A working directory is the folder where R reads and saves files. To check your current working directory run:
+A working directory is the folder where R reads and saves files. When this notebook runs in Colab, opening it from GitHub downloads only the notebook itself. The following cell clones the complete repository, including the prepared `.rds` datasets, and selects it as the working directory. When working locally, your existing working directory is left unchanged.
 
 ```{r}
-#| eval: false
+repo_dir <- "/content/MedInfNetworks2025"
+
+if (dir.exists("/content") && !dir.exists(repo_dir)) {
+  system2(
+    "git",
+    c(
+      "clone",
+      "https://github.com/tanevskilab/MedInfNetworks2025.git",
+      repo_dir
+    )
+  )
+}
+
+if (dir.exists(repo_dir)) {
+  setwd(repo_dir)
+}
+
 getwd()
-```
-
-To set a new working directory:
-
-1.  In RStudio, go to **Session** → **Set Working Directory** → **Choose Directory…**
-
-2.  Select the folder you want to use.
-
-Or set it directly with code:
-
-```{r}
-#| eval: false
-setwd("/path/to/your/folder")
 ```
 
 ## Accessing TCGA Data

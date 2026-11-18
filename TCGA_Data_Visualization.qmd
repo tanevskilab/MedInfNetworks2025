@@ -15,21 +15,43 @@ format:
 
 In this notebook, we will explore and visualize RNA-seq data from TCGA-BRCA that we previously downloaded and prepared. Before creating plots, we need to load the required R packages and the prepared dataset.
 
-Depending on your R-version, you might need to downgrade to 4.4.3 to install `OmnipathR`. If you have problems with this, please ask.
+Package versions are selected automatically for the R version provided by Colab. If `OmnipathR` cannot be installed, please ask for help rather than changing the Colab R version manually.
+
+Run the following cell once when starting a new Google Colab runtime. Package installation may take several minutes. You do not need to run it again during the same session. When working locally, the cell only installs packages that are not already available.
 
 ```{r}
-#| eval: false
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-if (!require("tidyverse", quietly = TRUE))
-    install.packages("tidyverse")
-BiocManager::install("edgeR")
-BiocManager::install("DESeq2")
-BiocManager::install("apeglm")
-BiocManager::install("decoupleR")
-BiocManager::install("OmnipathR")
-install.packages("ggrepel")
-install.packages("pheatmap")
+cran_packages <- c(
+  "BiocManager",
+  "tidyverse",
+  "ggrepel",
+  "pheatmap",
+  "knitr"
+)
+
+missing_cran <- cran_packages[
+  !vapply(cran_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_cran) > 0) {
+  install.packages(missing_cran, repos = "https://cloud.r-project.org")
+}
+
+bioc_packages <- c(
+  "SummarizedExperiment",
+  "edgeR",
+  "DESeq2",
+  "apeglm",
+  "decoupleR",
+  "OmnipathR"
+)
+
+missing_bioc <- bioc_packages[
+  !vapply(bioc_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_bioc) > 0) {
+  BiocManager::install(missing_bioc, ask = FALSE, update = FALSE)
+}
 ```
 
 ```{r}
@@ -42,6 +64,29 @@ library(SummarizedExperiment)
 library(edgeR)
 library(ggrepel)
 library(knitr)
+```
+
+When this notebook runs in Colab, opening it from GitHub downloads only the notebook itself. The following cell clones the complete repository, including the prepared `.rds` datasets, and selects it as the working directory. When working locally, your existing working directory is left unchanged.
+
+```{r}
+repo_dir <- "/content/MedInfNetworks2025"
+
+if (dir.exists("/content") && !dir.exists(repo_dir)) {
+  system2(
+    "git",
+    c(
+      "clone",
+      "https://github.com/tanevskilab/MedInfNetworks2025.git",
+      repo_dir
+    )
+  )
+}
+
+if (dir.exists(repo_dir)) {
+  setwd(repo_dir)
+}
+
+getwd()
 ```
 
 ```{r}
