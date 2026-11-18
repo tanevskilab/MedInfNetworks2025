@@ -66,6 +66,37 @@ library(ggrepel)
 library(knitr)
 ```
 
+The helper below renders data frames as HTML tables in Colab and adds horizontal scrolling for wide tables. It also works when this Quarto document is rendered locally.
+
+```{r}
+display_table <- function(data, caption = NULL) {
+  table_html <- knitr::kable(
+    as.data.frame(data),
+    format = "html",
+    caption = caption,
+    escape = TRUE,
+    table.attr = paste0(
+      'style="white-space: nowrap; border-collapse: collapse; ',
+      'font-size: 0.9em;"'
+    )
+  )
+
+  scrollable_table <- paste0(
+    '<div style="max-width: 100%; overflow-x: auto; margin: 1em 0;">',
+    table_html,
+    "</div>"
+  )
+
+  if (interactive() && requireNamespace("IRdisplay", quietly = TRUE)) {
+    IRdisplay::display_html(scrollable_table)
+  } else {
+    knitr::asis_output(scrollable_table)
+  }
+
+  invisible(data)
+}
+```
+
 When this notebook runs in Colab, opening it from GitHub downloads only the notebook itself. The following cell clones the complete repository, including the prepared `.rds` datasets, and selects it as the working directory. When working locally, your existing working directory is left unchanged.
 
 ```{r}
@@ -647,7 +678,7 @@ Next, we obtain the PROGENy model. The network encodes weighted relationships be
 # saveRDS(net_progeny, file = "net_progeny.rds")
 
 net_progeny <- readRDS("net_progeny.rds")
-kable(head(net_progeny))
+display_table(head(net_progeny), caption = "PROGENy Network")
 ```
 
 #### Pathway Activities per Sample
@@ -664,7 +695,7 @@ sample_acts <- run_mlm(mat = logcounts,
 ```
 
 ```{r}
-kable(head(sample_acts))
+display_table(head(sample_acts), caption = "Pathway Activities per Sample")
 ```
 The output contains a score for each PROGENy pathway in every sample. To visualize the patterns, we transform the data into a matrix, scale each pathway for better visualization, and generate a heatmap:
 ```{r}
@@ -708,7 +739,7 @@ contrast_acts <- run_mlm(mat  =deg,
                                 .mor = 'weight', 
                                 minsize = 5)
 
-kable(head(contrast_acts))
+display_table(head(contrast_acts), caption = "Contrast-level Pathway Activities")
 ```
 
 Finally, we plot the pathway scores as a bar chart to highlight pathways with the strongest inferred changes:

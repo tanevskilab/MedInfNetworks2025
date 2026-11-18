@@ -53,6 +53,37 @@ library(TCGAbiolinks)
 library(tidyverse)
 ```
 
+The helper below renders data frames as HTML tables in Colab and adds horizontal scrolling for wide tables. It also works when this Quarto document is rendered locally.
+
+```{r}
+display_table <- function(data, caption = NULL) {
+  table_html <- knitr::kable(
+    as.data.frame(data),
+    format = "html",
+    caption = caption,
+    escape = TRUE,
+    table.attr = paste0(
+      'style="white-space: nowrap; border-collapse: collapse; ',
+      'font-size: 0.9em;"'
+    )
+  )
+
+  scrollable_table <- paste0(
+    '<div style="max-width: 100%; overflow-x: auto; margin: 1em 0;">',
+    table_html,
+    "</div>"
+  )
+
+  if (interactive() && requireNamespace("IRdisplay", quietly = TRUE)) {
+    IRdisplay::display_html(scrollable_table)
+  } else {
+    knitr::asis_output(scrollable_table)
+  }
+
+  invisible(data)
+}
+```
+
 ## Setting up working directory
 
 A working directory is the folder where R reads and saves files. When this notebook runs in Colab, opening it from GitHub downloads only the notebook itself. The following cell clones the complete repository, including the prepared `.rds` datasets, and selects it as the working directory. When working locally, your existing working directory is left unchanged.
@@ -93,8 +124,10 @@ all_projects <- getGDCprojects()
 tcga_projects <- all_projects[grepl("^TCGA-", all_projects$project_id), ]
 
 # Show available cancer types
-kable(head(tcga_projects[, c("project_id", "name")]),
-      caption = "Available TCGA Cancer Types")
+display_table(
+  head(tcga_projects[, c("project_id", "name")]),
+  caption = "Available TCGA Cancer Types"
+)
 ```
 
 In this tutorial, we focus on **Breast Cancer** (TCGA-BRCA) in **females** as an example. Let’s look at the available data categories for BRCA:
@@ -102,7 +135,10 @@ In this tutorial, we focus on **Breast Cancer** (TCGA-BRCA) in **females** as an
 ```{r}
 project_summary <- getProjectSummary(project = "TCGA-BRCA")
 
-kable(project_summary$data_categories, caption="Available Data Categories for BRCA")
+display_table(
+  project_summary$data_categories,
+  caption = "Available Data Categories for BRCA"
+)
 ```
 
 #### Building a GDC Query
@@ -135,7 +171,19 @@ brca_samples <- GDCquery(
 
 # Extract sample metadata
 sample_info <- getResults(brca_samples)
-kable(head(sample_info), caption = "Sample Metadata")
+display_table(
+  sample_info %>%
+    select(
+      cases.submitter_id,
+      sample.submitter_id,
+      sample_type,
+      data_type,
+      analysis_workflow_type,
+      file_name
+    ) %>%
+    head(),
+  caption = "Sample Metadata"
+)
 ```
 
 The resulting metadata includes useful information, such as:
@@ -152,7 +200,7 @@ This metadata tells us what files exist, but it does not include some important 
 
 ```{r}
 brca_clin <- GDCquery_clinic(project = "TCGA-BRCA", type = "clinical")
-kable(head(brca_clin))
+display_table(head(brca_clin), caption = "Clinical Data")
 ```
 
 The clinical table typically includes:
@@ -227,11 +275,13 @@ Why are the numbers now different? Before you continue, try to think about why t
 This does not mean TCGA suddenly contains more patients, instead it means some patients contributed multiple samples, each counted separately. To verify this, we identify patients that appear more than once:
 
 ```{r}
-kable(sample_info %>%
+sample_info %>%
   add_count(cases.submitter_id) %>%  # adds column 'n' (number of appearances)
   filter(n > 1) %>%                  # keep only duplicated patient IDs
   arrange(cases.submitter_id) %>%
-  head())
+  select(cases.submitter_id, sample.submitter_id, sample_type, gender, n) %>%
+  head() %>%
+  display_table(caption = "Patients With Multiple Samples")
 ```
 
 This reveals that many patients have two samples:
@@ -380,7 +430,7 @@ feature_metadata <- rowData(brca_data_small)
 The feature_metadata (rowData of the SummarizedExperiment) contains information about each gene. It’s good practice to explore the metadata before analysis.
 
 ```{r}
-kable(head(feature_metadata))
+display_table(head(feature_metadata), caption = "Gene Metadata")
 ```
 
 Here you can see columns like:
