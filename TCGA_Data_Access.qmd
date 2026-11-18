@@ -60,16 +60,27 @@ display_table <- function(data, caption = NULL) {
   table_html <- knitr::kable(
     as.data.frame(data),
     format = "html",
+    align = "l",
     caption = caption,
     escape = TRUE,
-    table.attr = paste0(
-      'style="white-space: nowrap; border-collapse: collapse; ',
-      'font-size: 0.9em;"'
-    )
+    table.attr = 'class="colab-data-table"'
   )
 
   scrollable_table <- paste0(
-    '<div style="max-width: 100%; overflow-x: auto; margin: 1em 0;">',
+    "<style>",
+    ".colab-table-wrapper {max-width:100%; overflow-x:auto; margin:1em 0;}",
+    ".colab-data-table {border-collapse:collapse; width:max-content; ",
+    "font-size:0.9em; white-space:nowrap;}",
+    ".colab-data-table caption {text-align:left; font-weight:600; ",
+    "padding:0 0 0.6em 0;}",
+    ".colab-data-table th, .colab-data-table td {border:1px solid #777; ",
+    "padding:6px 10px; text-align:left; vertical-align:top;}",
+    ".colab-data-table th {background:rgba(127,127,127,0.22); ",
+    "font-weight:600;}",
+    ".colab-data-table tbody tr:nth-child(even) {",
+    "background:rgba(127,127,127,0.08);}",
+    "</style>",
+    '<div class="colab-table-wrapper">',
     table_html,
     "</div>"
   )
@@ -204,7 +215,19 @@ This metadata tells us what files exist, but it does not include some important 
 
 ```{r}
 brca_clin <- GDCquery_clinic(project = "TCGA-BRCA", type = "clinical")
-display_table(head(brca_clin), caption = "Clinical Data")
+display_table(
+  brca_clin %>%
+    select(any_of(c(
+      "submitter_id",
+      "gender",
+      "age_at_diagnosis",
+      "primary_diagnosis",
+      "ajcc_pathologic_stage",
+      "vital_status"
+    ))) %>%
+    head(),
+  caption = "Clinical Data"
+)
 ```
 
 The clinical table typically includes:
@@ -235,7 +258,7 @@ brca_clin <- brca_clin %>%
 Next, we inspect how many males and females are present in the cleaned clinical dataset:
 
 ```{r}
-table(brca_clin$gender)
+display_table(count(brca_clin, gender, name = "Patients"), caption = "Patients by Gender")
 ```
 
 This gives us the number of unique male and female patients in TCGA-BRCA.
@@ -265,7 +288,7 @@ Now each sample is associated with a patient’s gender.
 After merging, we check how many samples belong to each gender:
 
 ```{r}
-table(sample_info$gender)
+display_table(count(sample_info, gender, name = "Samples"), caption = "Samples by Gender")
 ```
 
 ::: {.callout-tip title="Exercise"}
