@@ -15,43 +15,21 @@ format:
 
 In this notebook, we will explore and visualize RNA-seq data from TCGA-BRCA that we previously downloaded and prepared. Before creating plots, we need to load the required R packages and the prepared dataset.
 
-Package versions are selected automatically for the R version provided by Colab. If `OmnipathR` cannot be installed, please ask for help rather than changing the Colab R version manually.
-
-Run the following cell once when starting a new Google Colab runtime. Package installation may take several minutes. You do not need to run it again during the same session. When working locally, the cell only installs packages that are not already available.
+Depending on your R-version, you might need to downgrade to 4.4.3 to install `OmnipathR`. If you have problems with this, please ask.
 
 ```{r}
-cran_packages <- c(
-  "BiocManager",
-  "tidyverse",
-  "ggrepel",
-  "pheatmap",
-  "knitr"
-)
-
-missing_cran <- cran_packages[
-  !vapply(cran_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-
-if (length(missing_cran) > 0) {
-  install.packages(missing_cran, repos = "https://cloud.r-project.org")
-}
-
-bioc_packages <- c(
-  "SummarizedExperiment",
-  "edgeR",
-  "DESeq2",
-  "apeglm",
-  "decoupleR",
-  "OmnipathR"
-)
-
-missing_bioc <- bioc_packages[
-  !vapply(bioc_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-
-if (length(missing_bioc) > 0) {
-  BiocManager::install(missing_bioc, ask = FALSE, update = FALSE)
-}
+#| eval: false
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+if (!require("tidyverse", quietly = TRUE))
+    install.packages("tidyverse")
+BiocManager::install("edgeR")
+BiocManager::install("DESeq2")
+BiocManager::install("apeglm")
+BiocManager::install("decoupleR")
+BiocManager::install("OmnipathR")
+install.packages("ggrepel")
+install.packages("pheatmap")
 ```
 
 ```{r}
@@ -64,75 +42,6 @@ library(SummarizedExperiment)
 library(edgeR)
 library(ggrepel)
 library(knitr)
-```
-
-The helper below renders data frames as HTML tables in Colab and adds horizontal scrolling for wide tables. It also works when this Quarto document is rendered locally.
-
-```{r}
-display_table <- function(data, caption = NULL) {
-  table_html <- knitr::kable(
-    as.data.frame(data),
-    format = "html",
-    align = "l",
-    caption = caption,
-    escape = TRUE,
-    table.attr = 'class="colab-data-table"'
-  )
-
-  scrollable_table <- paste0(
-    "<style>",
-    ".colab-table-wrapper {max-width:100%; overflow-x:auto; margin:1em 0;}",
-    ".colab-data-table {border-collapse:collapse; width:max-content; ",
-    "font-size:0.9em; white-space:nowrap;}",
-    ".colab-data-table caption {text-align:left; font-weight:600; ",
-    "padding:0 0 0.6em 0;}",
-    ".colab-data-table th, .colab-data-table td {border:1px solid #777; ",
-    "padding:6px 10px; text-align:left; vertical-align:top;}",
-    ".colab-data-table th {background:rgba(127,127,127,0.22); ",
-    "font-weight:600;}",
-    ".colab-data-table tbody tr:nth-child(even) {",
-    "background:rgba(127,127,127,0.08);}",
-    "</style>",
-    '<div class="colab-table-wrapper">',
-    table_html,
-    "</div>"
-  )
-
-  if (isTRUE(getOption("knitr.in.progress"))) {
-    return(knitr::asis_output(scrollable_table))
-  }
-
-  if (requireNamespace("IRdisplay", quietly = TRUE)) {
-    IRdisplay::display_html(scrollable_table)
-    return(invisible(data))
-  }
-
-  # Fallback for other R notebook environments.
-  structure(scrollable_table, class = c("html", "character"))
-}
-```
-
-When this notebook runs in Colab, opening it from GitHub downloads only the notebook itself. The following cell clones the complete repository, including the prepared `.rds` datasets, and selects it as the working directory. When working locally, your existing working directory is left unchanged.
-
-```{r}
-repo_dir <- "/content/MedInfNetworks2025"
-
-if (dir.exists("/content") && !dir.exists(repo_dir)) {
-  system2(
-    "git",
-    c(
-      "clone",
-      "https://github.com/tanevskilab/MedInfNetworks2025.git",
-      repo_dir
-    )
-  )
-}
-
-if (dir.exists(repo_dir)) {
-  setwd(repo_dir)
-}
-
-getwd()
 ```
 
 ```{r}
@@ -418,7 +327,7 @@ We use the `edgeR` package to calculate counts per million (CPM) and filter gene
 
 ```{r}
 keep <- filterByExpr(expr_matrix)
-display_table(as.data.frame(table(Kept = keep)), caption = "Genes After Filtering")
+summary(keep)
 ```
 
 In theory, one could set a manual expression threshold, but this choice is often arbitrary. To better understand how `filterByExpr` makes its decision, consult the function’s documentation (place the cursor on the function and press F1).
@@ -489,7 +398,7 @@ Before applying PCA, we transpose the expression matrix so that samples are rows
 
 ```{r}
 pca <- prcomp(t(logcounts), center = TRUE, scale. = TRUE)
-display_table(t(summary(pca)$importance), caption = "Importance of Principal Components")
+summary(pca)
 ```
 
 Convert PCA results to a data frame for plotting:
@@ -693,7 +602,7 @@ Next, we obtain the PROGENy model. The network encodes weighted relationships be
 # saveRDS(net_progeny, file = "net_progeny.rds")
 
 net_progeny <- readRDS("net_progeny.rds")
-display_table(head(net_progeny), caption = "PROGENy Network")
+kable(head(net_progeny))
 ```
 
 #### Pathway Activities per Sample
@@ -710,7 +619,7 @@ sample_acts <- run_mlm(mat = logcounts,
 ```
 
 ```{r}
-display_table(head(sample_acts), caption = "Pathway Activities per Sample")
+kable(head(sample_acts))
 ```
 The output contains a score for each PROGENy pathway in every sample. To visualize the patterns, we transform the data into a matrix, scale each pathway for better visualization, and generate a heatmap:
 ```{r}
@@ -754,7 +663,7 @@ contrast_acts <- run_mlm(mat  =deg,
                                 .mor = 'weight', 
                                 minsize = 5)
 
-display_table(head(contrast_acts), caption = "Contrast-level Pathway Activities")
+kable(head(contrast_acts))
 ```
 
 Finally, we plot the pathway scores as a bar chart to highlight pathways with the strongest inferred changes:

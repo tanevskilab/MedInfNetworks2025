@@ -17,28 +17,22 @@ In this session, we will learn how to use the R programming language to access d
 
 To begin working with TCGA data in R, we need to install several packages. Some packages come from CRAN (the main R repository) and can be installed with `install.packages`, while others (especially bioinformatics tools) come from Bioconductor.
 
-Run the following cell once when starting a new Google Colab runtime. Package installation may take several minutes. You do not need to run it again during the same session. When working locally, the cell only installs packages that are not already available.
+**For Windows users:** If you are using Windows, packages installed from source may require Rtools, a system for compiling R packages. You can download it from the R website [here](https://cran.r-project.org/bin/windows/Rtools/). After installation, restart RStudio.
+
+**Check that your R packages are up to date In RStudio:**
+
+1.  Go to **Tools** → **Check for Package Updates…**
+2.  A window will open showing which packages need updating.
+3.  Click Update to install the newest versions.
+
+Now we can install the packages we need by running the following cell:
 
 ```{r}
-cran_packages <- c("BiocManager", "tidyverse", "knitr")
-
-missing_cran <- cran_packages[
-  !vapply(cran_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-
-if (length(missing_cran) > 0) {
-  install.packages(missing_cran, repos = "https://cloud.r-project.org")
-}
-
-bioc_packages <- c("TCGAbiolinks", "SummarizedExperiment")
-
-missing_bioc <- bioc_packages[
-  !vapply(bioc_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-
-if (length(missing_bioc) > 0) {
-  BiocManager::install(missing_bioc, ask = FALSE, update = FALSE)
-}
+#| eval: false
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("TCGAbiolinks", type="source")
+install.packages("tidyverse")
 ```
 
 You can load the installed packages:
@@ -53,75 +47,26 @@ library(TCGAbiolinks)
 library(tidyverse)
 ```
 
-The helper below renders data frames as HTML tables in Colab and adds horizontal scrolling for wide tables. It also works when this Quarto document is rendered locally.
-
-```{r}
-display_table <- function(data, caption = NULL) {
-  table_html <- knitr::kable(
-    as.data.frame(data),
-    format = "html",
-    align = "l",
-    caption = caption,
-    escape = TRUE,
-    table.attr = 'class="colab-data-table"'
-  )
-
-  scrollable_table <- paste0(
-    "<style>",
-    ".colab-table-wrapper {max-width:100%; overflow-x:auto; margin:1em 0;}",
-    ".colab-data-table {border-collapse:collapse; width:max-content; ",
-    "font-size:0.9em; white-space:nowrap;}",
-    ".colab-data-table caption {text-align:left; font-weight:600; ",
-    "padding:0 0 0.6em 0;}",
-    ".colab-data-table th, .colab-data-table td {border:1px solid #777; ",
-    "padding:6px 10px; text-align:left; vertical-align:top;}",
-    ".colab-data-table th {background:rgba(127,127,127,0.22); ",
-    "font-weight:600;}",
-    ".colab-data-table tbody tr:nth-child(even) {",
-    "background:rgba(127,127,127,0.08);}",
-    "</style>",
-    '<div class="colab-table-wrapper">',
-    table_html,
-    "</div>"
-  )
-
-  if (isTRUE(getOption("knitr.in.progress"))) {
-    return(knitr::asis_output(scrollable_table))
-  }
-
-  if (requireNamespace("IRdisplay", quietly = TRUE)) {
-    IRdisplay::display_html(scrollable_table)
-    return(invisible(data))
-  }
-
-  # Fallback for other R notebook environments.
-  structure(scrollable_table, class = c("html", "character"))
-}
-```
-
 ## Setting up working directory
 
-A working directory is the folder where R reads and saves files. When this notebook runs in Colab, opening it from GitHub downloads only the notebook itself. The following cell clones the complete repository, including the prepared `.rds` datasets, and selects it as the working directory. When working locally, your existing working directory is left unchanged.
+A working directory is the folder where R reads and saves files. To check your current working directory run:
 
 ```{r}
-repo_dir <- "/content/MedInfNetworks2025"
-
-if (dir.exists("/content") && !dir.exists(repo_dir)) {
-  system2(
-    "git",
-    c(
-      "clone",
-      "https://github.com/tanevskilab/MedInfNetworks2025.git",
-      repo_dir
-    )
-  )
-}
-
-if (dir.exists(repo_dir)) {
-  setwd(repo_dir)
-}
-
+#| eval: false
 getwd()
+```
+
+To set a new working directory:
+
+1.  In RStudio, go to **Session** → **Set Working Directory** → **Choose Directory…**
+
+2.  Select the folder you want to use.
+
+Or set it directly with code:
+
+```{r}
+#| eval: false
+setwd("/path/to/your/folder")
 ```
 
 ## Accessing TCGA Data
@@ -139,10 +84,8 @@ all_projects <- getGDCprojects()
 tcga_projects <- all_projects[grepl("^TCGA-", all_projects$project_id), ]
 
 # Show available cancer types
-display_table(
-  head(tcga_projects[, c("project_id", "name")]),
-  caption = "Available TCGA Cancer Types"
-)
+kable(head(tcga_projects[, c("project_id", "name")]),
+      caption = "Available TCGA Cancer Types")
 ```
 
 In this tutorial, we focus on **Breast Cancer** (TCGA-BRCA) in **females** as an example. Let’s look at the available data categories for BRCA:
@@ -150,10 +93,7 @@ In this tutorial, we focus on **Breast Cancer** (TCGA-BRCA) in **females** as an
 ```{r}
 project_summary <- getProjectSummary(project = "TCGA-BRCA")
 
-display_table(
-  project_summary$data_categories,
-  caption = "Available Data Categories for BRCA"
-)
+kable(project_summary$data_categories, caption="Available Data Categories for BRCA")
 ```
 
 #### Building a GDC Query
@@ -186,19 +126,7 @@ brca_samples <- GDCquery(
 
 # Extract sample metadata
 sample_info <- getResults(brca_samples)
-display_table(
-  sample_info %>%
-    select(
-      cases.submitter_id,
-      sample.submitter_id,
-      sample_type,
-      data_type,
-      analysis_workflow_type,
-      file_name
-    ) %>%
-    head(),
-  caption = "Sample Metadata"
-)
+kable(head(sample_info), caption = "Sample Metadata")
 ```
 
 The resulting metadata includes useful information, such as:
@@ -209,40 +137,18 @@ The resulting metadata includes useful information, such as:
 
 -   technical details and sequencing information
 
-This metadata tells us what files exist, but it does not include some important patient-level information, such as reported sex, age, or diagnosis. These details are stored separately in the clinical dataset.
+This metadata tells us what files exist, but it does not include some important patient-level information, such as gender, age, or diagnosis. These details are stored separately in the clinical dataset.
 
 #### Accessing Clinical Data
 
 ```{r}
 brca_clin <- GDCquery_clinic(project = "TCGA-BRCA", type = "clinical")
-
-# Current GDC releases use sex_at_birth. Older releases used gender.
-sex_field <- intersect(c("sex_at_birth", "gender"), names(brca_clin))[1]
-id_field <- intersect(c("bcr_patient_barcode", "submitter_id"), names(brca_clin))[1]
-if (is.na(sex_field) || is.na(id_field)) {
-  stop("Missing clinical demographic or patient ID field. Inspect names(brca_clin).")
-}
-brca_clin$reported_sex <- tolower(trimws(brca_clin[[sex_field]]))
-brca_clin$patient_id <- brca_clin[[id_field]]
-
-display_table(
-  brca_clin %>%
-    select(any_of(c(
-      "patient_id",
-      "reported_sex",
-      "age_at_diagnosis",
-      "primary_diagnosis",
-      "ajcc_pathologic_stage",
-      "vital_status"
-    ))) %>%
-    head(),
-  caption = "Clinical Data"
-)
+kable(head(brca_clin))
 ```
 
 The clinical table typically includes:
 
--   reported sex
+-   gender
 
 -   age at diagnosis
 
@@ -252,53 +158,53 @@ The clinical table typically includes:
 
 -   etc.
 
-First, we verify whether the clinical data contains any patients without a reported sex entry:
+First, we verify whether the clinical data contains any patients without a gender entry:
 
 ```{r}
-sum(is.na(brca_clin$reported_sex))
+sum(is.na(brca_clin$gender))
 ```
 
-If one or more entries have missing values, we remove those rows to avoid problems later:
+If one or more entries have missing gender, as it is the case here, we remove those rows to avoid problems later:
 
 ```{r}
 brca_clin <- brca_clin %>%
-  filter(!is.na(reported_sex)) 
+  filter(!is.na(gender)) 
 ```
 
 Next, we inspect how many males and females are present in the cleaned clinical dataset:
 
 ```{r}
-display_table(count(brca_clin, reported_sex, name = "Patients"), caption = "Patients by Reported Sex")
+table(brca_clin$gender)
 ```
 
 This gives us the number of unique male and female patients in TCGA-BRCA.
 
-#### Merging Reported Sex Information Into Sample Metadata
+#### Merging Clinical Gender Information Into Sample Metadata
 
-To filter samples by reported sex later, we need reported sex information added directly to the `sample_info` table, which currently only contains sample-level metadata.
+To filter samples by gender later, we need gender information added directly to the `sample_info` table, which currently only contains sample-level metadata.
 
 We merge the two tables using:
 
 -   "cases.submitter_id" (in `sample_info`)
 
--   "patient_id" (in `brca_clin`)
+-   "bcr_patient_barcode" (in `brca_clin`)
 
 These are equivalent patient identifiers.
 
 ```{r}
 sample_info <- sample_info %>%
   left_join(
-    brca_clin %>% select(patient_id, reported_sex),
-    by = c("cases.submitter_id" = "patient_id")
+    brca_clin %>% select(bcr_patient_barcode, gender),
+    by = c("cases.submitter_id" = "bcr_patient_barcode")
   )
 ```
 
-Now each sample is associated with a patient’s reported sex.
+Now each sample is associated with a patient’s gender.
 
-After merging, we check how many samples belong to each reported sex:
+After merging, we check how many samples belong to each gender:
 
 ```{r}
-display_table(count(sample_info, reported_sex, name = "Samples"), caption = "Samples by Reported Sex")
+table(sample_info$gender)
 ```
 
 ::: {.callout-tip title="Exercise"}
@@ -312,13 +218,11 @@ Why are the numbers now different? Before you continue, try to think about why t
 This does not mean TCGA suddenly contains more patients, instead it means some patients contributed multiple samples, each counted separately. To verify this, we identify patients that appear more than once:
 
 ```{r}
-sample_info %>%
+kable(sample_info %>%
   add_count(cases.submitter_id) %>%  # adds column 'n' (number of appearances)
   filter(n > 1) %>%                  # keep only duplicated patient IDs
   arrange(cases.submitter_id) %>%
-  select(cases.submitter_id, sample.submitter_id, sample_type, reported_sex, n) %>%
-  head() %>%
-  display_table(caption = "Patients With Multiple Samples")
+  head())
 ```
 
 This reveals that many patients have two samples:
@@ -327,16 +231,16 @@ This reveals that many patients have two samples:
 
 -   Solid Tissue Normal
 
-A single patient may contribute multiple samples. Therefore, the reported sex counts increase because we now count samples, not patients.
+A single patient may contribute multiple samples. Therefore, the gender counts increase because we now count samples, not patients.
 
 </details>
 
 #### Filtering to Keep Only Female Samples
 
-Once we confirm the reported sex assignment, we can keep only female samples:
+Once we confirm the gender assignment, we can keep only female samples:
 
 ```{r}
-sample_info <- sample_info %>% filter(reported_sex == "female")
+sample_info <- sample_info %>% filter(gender != "male")
 ```
 
 From this point forward, all analyses will be limited to female BRCA samples, which is common since male breast cancer biology differs significantly and is extremely rare.
@@ -353,7 +257,7 @@ We choose:
 
 from 10 patients total, meaning we have one tumor and control sample per patient.
 
-We extract the sample barcodes from `sample_info`, which already contains the reported sex and clinical metadata we merged earlier.
+We extract the sample barcodes from `sample_info`, which already contains the gender and clinical metadata we merged earlier.
 
 ```{r}
 # Identify patients with exactly 2 samples
@@ -467,7 +371,7 @@ feature_metadata <- rowData(brca_data_small)
 The feature_metadata (rowData of the SummarizedExperiment) contains information about each gene. It’s good practice to explore the metadata before analysis.
 
 ```{r}
-display_table(head(feature_metadata), caption = "Gene Metadata")
+kable(head(feature_metadata))
 ```
 
 Here you can see columns like:
